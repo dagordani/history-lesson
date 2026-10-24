@@ -6,11 +6,11 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { registerAppResource, registerAppTool, RESOURCE_MIME_TYPE } from "@modelcontextprotocol/ext-apps/server";
 import { z } from "zod";
-import { questFor } from "./content.js";
+import { advance, initialState, questFor } from "./content.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const widget = readFileSync(join(here, "../public/history-quest.html"), "utf8");
-const UI_URI = "ui://history-quest/mission-v1.html";
+const UI_URI = "ui://history-quest/mission-v2.html";
 
 function appServer() {
   const server = new McpServer({ name: "history-quest", version: "0.1.0" });
@@ -19,18 +19,25 @@ function appServer() {
   }));
 
   const launchSchema = { topic: z.string().min(2).describe("A historical event, person, movement, or idea to explore") };
-  const choiceSchema = { topic: z.string().min(2), choiceId: z.string().min(1) };
+  const choiceSchema = {
+    topic: z.string().min(2), choiceId: z.string().min(1),
+    state: z.object({ sceneId: z.string(), visited: z.array(z.string()), unlocked: z.array(z.string()), points: z.number().nonnegative(), lastConsequence: z.string().optional() })
+  };
   const metadata = { ui: { resourceUri: UI_URI }, "openai/ui": { prefersDisplayMode: "fullscreen" } };
   registerAppTool(server, "launch_history_quest", {
     title: "Launch History Quest", description: "Creates an interactive historical decision mission with a timeline, stakes, and connected topics.",
     inputSchema: launchSchema, _meta: metadata
-  }, async ({ topic }) => ({ content: [{ type: "text", text: `History Quest started: ${topic}` }], structuredContent: { quest: questFor(topic) } }));
-  registerAppTool(server, "resolve_history_choice", {
-    title: "Resolve a historical decision", description: "Explains the contemporary stakes and likely consequences of a choice in a History Quest.",
+  }, async ({ topic }) => {
+    const quest = questFor(topic);
+    return { content: [{ type: "text", text: `History Quest started: ${topic}` }], structuredContent: { quest, state: initialState(quest) } };
+  });
+  registerAppTool(server, "advance_history_scene", {
+    title: "Advance a History Quest scene", description: "Applies a learner decision, changes the next scene, and unlocks connected ideas.",
     inputSchema: choiceSchema, _meta: metadata
-  }, async ({ topic, choiceId }) => {
-    const quest = questFor(topic); const choice = quest.choices.find((item) => item.id === choiceId);
-    return { content: [{ type: "text", text: choice ? choice.outcome : "That option is unavailable." }], structuredContent: { quest, selectedChoice: choice ?? null } };
+  }, async ({ topic, choiceId, state }) => {
+    const quest = questFor(topic);
+    const nextState = advance(quest, state, choiceId);
+    return { content: [{ type: "text", text: nextState.lastConsequence ?? "That option is unavailable." }], structuredContent: { quest, state: nextState } };
   });
   return server;
 }
